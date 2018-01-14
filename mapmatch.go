@@ -1,95 +1,76 @@
 package mapmatch
 
 import (
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
-)
-
-var session *mgo.Session
-
-var (
-	DBName             = "osm"
-	WaysCollectionName = "ways"
-	MongoHost          = "127.0.0.1:27017"
-
-	//Minimum and maximum distance for loading maps base on a point
-	//Used in mongo db.
-	MinLoadingDistance int
-	MaxLoadingDistance = 200
+	"math"
+	"log"
 )
 
 type FastMapMatcher struct {
-	osmMap *OsmMap
-	points []PointsData
+	osmMap           *OsmMap
+	points           []PointsData
+	lastMatchedIndex int
 }
 
 type PointsData struct {
-	OriginalLatitude  float64
-	OriginalLongitude float64
-	MatchedLatitude   float64
-	MatchedLongitude  float64
+	OriginalCoordinate Coordinate
+	MatchedProjection  *Projection
 }
 
-type ResPoint struct {
-	Index     int
+type Coordinate struct {
 	Latitude  float64
 	Longitude float64
 }
 
-func (model *FastMapMatcher) MatchPoint(lat, lng float64) ([]ResPoint, error) {
-	result := []ResPoint{}
-	if model.osmMap == nil {
-		om, err := NewOsmMap(lat, lng)
-		if err != nil {
-			return nil, err
-		}
-		model.osmMap = om
-	}
+type Point struct {
+	Coordinate
+	Index int
+}
+
+func (model *FastMapMatcher) MatchPoint(lat, lng float64) ([]Point, error) {
+	result := []Point{}
 
 	pointData := PointsData{
-		OriginalLatitude:  lat,
-		OriginalLongitude: lng,
+		OriginalCoordinate: Coordinate{
+			Latitude:  lat,
+			Longitude: lng,
+		},
 	}
-
 	model.points = append(model.points, pointData)
 
-	result = append(result, ResPoint{
-		Index:     len(model.points) - 1,
-		Latitude:  model.osmMap.Ways[0].Loc.Coordinates[len(model.points)-1][1],
-		Longitude: model.osmMap.Ways[0].Loc.Coordinates[len(model.points)-1][0],
+	if model.lastMatchedIndex == 0 {
+		if err := model.matchFirstPoint(); err != nil {
+			return nil, err
+		}
+	}
+
+	result = append(result, Point{
+		Index: len(model.points) - 1,
+		Coordinate: Coordinate{
+			Latitude:  model.points[0].MatchedProjection.Latitude,
+			Longitude: model.points[0].MatchedProjection.Longitude,
+		},
 	})
 
 	return result, nil
 }
 
-func initializeDB() error {
-	if session == nil {
-		s, err := mgo.Dial(MongoHost)
-		if err != nil {
-			return err
-		}
-		session = s
-	}
-	return nil
-}
-
-func NewOsmMap(lat, lng float64) (*OsmMap, error) {
-	err := initializeDB()
+//Is used to match the starting point
+func (model *FastMapMatcher) matchFirstPoint() (err error) {
+	var arcs []Way
+	m, err := NewOsmMap(model.points[0].OriginalCoordinate)
 	if err != nil {
-		return nil, err
+		return
+	}
+	arcs = m.Ways
+	//Find closest projection and way
+	distance := math.MaxFloat64
+	for _, w := range arcs {
+		p := w.FindProjection(model.points[0].OriginalCoordinate)
+		log.Println(p.Distance, p.Arc.ID)
+		if p.Distance < distance {
+			model.points[0].MatchedProjection = &p
+		}
 	}
 
-	result := new(OsmMap)
-
-	err = session.DB(DBName).C(WaysCollectionName).Find(bson.M{
-		"loc": bson.M{"$near": bson.M{
-			"$geometry": bson.M{
-				"type":        "Point",
-				"coordinates": []float64{lng, lat},
-			},
-			"$minDistance": MinLoadingDistance,
-			"$maxDistance": MaxLoadingDistance,
-		}}}).All(&result.Ways)
-
-	return result, err
+	return
 }
