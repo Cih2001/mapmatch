@@ -1,6 +1,9 @@
 package mapmatch
 
-import "math"
+import (
+	"log"
+	"math"
+)
 
 type Way struct {
 	ID  int64 `bson:"_id" xml:"id,attr"`
@@ -65,7 +68,6 @@ func (model *Way) FindProjection(cor Coordinate) Projection {
 		}
 
 	}
-
 	return result
 }
 
@@ -87,32 +89,34 @@ func perpendicularDistance(cor Coordinate, waypoint1, waypoint2 WayPoint) (dista
 	if waypoint1.ID == waypoint2.ID {
 		return cor.linearDistance(waypoint1.Coordinate), waypoint1.Coordinate
 	}
-	m := (waypoint2.Coordinate.Latitude - waypoint1.Coordinate.Latitude) / (waypoint2.Coordinate.Longitude - waypoint1.Coordinate.Longitude)
-	result.Longitude = (m*(cor.Latitude-waypoint1.Coordinate.Latitude+m*waypoint1.Coordinate.Longitude) + cor.Longitude) / (m*m + 1)
-	result.Latitude = waypoint1.Coordinate.Latitude + m*(result.Longitude-waypoint1.Coordinate.Longitude)
+	m := (waypoint2.Latitude - waypoint1.Latitude) / (waypoint2.Longitude - waypoint1.Longitude)
+	//result.Longitude = (m*(cor.Longitude-waypoint1.Latitude+m*waypoint1.Longitude) + cor.Longitude) * m / (m*m + 1)
+	//result.Latitude = waypoint1.Latitude + m*(result.Longitude-waypoint1.Longitude)
+	k := waypoint2.Latitude - m*waypoint2.Longitude
+	result.Longitude = (cor.Longitude + m*cor.Latitude - m*k) / (m*m + 1)
+	result.Latitude = m*result.Longitude + k
 	distance = cor.linearDistance(result)
 
 	if isInWayPointsLimits(result, waypoint1, waypoint2) {
 		return
 	}
-
 	//result is not on the way, so we should return one of the waypoints.
 	distance = waypoint1.Coordinate.linearDistance(cor)
-	result.Longitude = waypoint1.Coordinate.Longitude
-	result.Latitude = waypoint1.Coordinate.Latitude
+	result.Longitude = waypoint1.Longitude
+	result.Latitude = waypoint1.Latitude
 	if waypoint2.Coordinate.linearDistance(cor) < distance {
 		distance = waypoint2.Coordinate.linearDistance(cor)
-		result.Longitude = waypoint2.Coordinate.Longitude
-		result.Latitude = waypoint2.Coordinate.Latitude
+		result.Longitude = waypoint2.Longitude
+		result.Latitude = waypoint2.Latitude
 	}
 	return
 }
 
 func isInWayPointsLimits(cor Coordinate, w1, w2 WayPoint) bool {
-	minLat := w1.Coordinate.Latitude
-	maxLat := w2.Coordinate.Longitude
-	minLng := w1.Coordinate.Latitude
-	maxLng := w2.Coordinate.Longitude
+	minLat := w1.Latitude
+	maxLat := w2.Latitude
+	minLng := w1.Longitude
+	maxLng := w2.Longitude
 	if maxLat < minLat {
 		minLat, maxLat = maxLat, minLat
 	}
@@ -122,5 +126,6 @@ func isInWayPointsLimits(cor Coordinate, w1, w2 WayPoint) bool {
 	if minLng < cor.Longitude && cor.Longitude < maxLng && minLat < cor.Latitude && cor.Latitude < maxLat {
 		return true
 	}
+	log.Println(minLng, maxLng, minLat, maxLat)
 	return false
 }

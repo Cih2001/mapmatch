@@ -15,7 +15,7 @@ var (
 	//Minimum and maximum distance for loading maps base on a point
 	//Used in mongo db.
 	MinLoadingDistance int
-	MaxLoadingDistance = 200
+	MaxLoadingDistance = 40
 )
 
 func initializeDB() error {
