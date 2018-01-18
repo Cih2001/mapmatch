@@ -2,18 +2,18 @@ package mapmatch
 
 import (
 	"math"
-	"log"
 )
 
 type FastMapMatcher struct {
 	osmMap           *OsmMap
 	points           []PointsData
-	lastMatchedIndex int
+	firstUnmatchedIndex int
 }
 
 type PointsData struct {
 	OriginalCoordinate Coordinate
 	MatchedProjection  *Projection
+	candidateWays []Way
 }
 
 type Coordinate struct {
@@ -27,8 +27,6 @@ type Point struct {
 }
 
 func (model *FastMapMatcher) MatchPoint(lat, lng float64) ([]Point, error) {
-	result := []Point{}
-
 	pointData := PointsData{
 		OriginalCoordinate: Coordinate{
 			Latitude:  lat,
@@ -37,59 +35,80 @@ func (model *FastMapMatcher) MatchPoint(lat, lng float64) ([]Point, error) {
 	}
 	model.points = append(model.points, pointData)
 
-	if model.lastMatchedIndex == 0 {
+	
+	return model.MatchLastNPoints(-1)
+}
+
+//MatchLastNPoints matches last N points, when N is 0, It will start from model.firstUnmatchedIndex and when N is negative, it will match all points.
+func (model *FastMapMatcher) MatchLastNPoints(N int) ([]Point, error) {
+	if model.firstUnmatchedIndex == 0 {
 		if err := model.matchFirstPoint(); err != nil {
 			return nil, err
 		}
 	}
 
-	return result, nil
-}
-
-//For testing purpose
-func (model *FastMapMatcher) ReturnRoadsPoints(lat, lng float64) []Point {
-
-	result := []Point{}
-
-	m, err := NewOsmMap(Coordinate{lat, lng})
-	if err != nil {
-		return nil
-	}
-
-	i := 0
-	for _, w := range m.Ways {
-		log.Println("Road ID:", w.ID)
-		for _, p := range w.Loc.Coordinates {
-			result = append(result, Point{
-				Coordinate{p[1], p[0]},
-				i,
-			})
-			i++
+	var (
+		result = []Point{}
+		lastMapRefreshIndex = 0
+		startIndex = 0
+		MaximumDistanceToRefresh = 200.0
+		m, _ = NewOsmMap(model.points[0].OriginalCoordinate)
+	)
+	
+	//Computing starting index
+	switch {
+	case N<0:
+		startIndex = 1
+	case N==0:
+		startIndex = model.firstUnmatchedIndex
+	case N>0:
+		startIndex = len(model.points)-N
+		if startIndex <= 1 {
+			startIndex = 1 
 		}
 	}
-
-	return result
-}
-
-//For testing purpose
-func (model *FastMapMatcher) ReturnAllProjections(lat, lng float64) []Point {
-	result := []Point{}
-
-	m, err := NewOsmMap(Coordinate{lat, lng})
-	if err != nil {
-		return nil
+	
+	//Computing condidates for each point.
+	for i := startIndex; i < len(model.points); i++ {
+		//refreshing roads database if nessessary.
+		if model.points[i].OriginalCoordinate.linearDistance(model.points[lastMapRefreshIndex].OriginalCoordinate)*110575 > MaximumDistanceToRefresh {
+			m, _ = NewOsmMap(model.points[i].OriginalCoordinate)
+			lastMapRefreshIndex = i
+		}
+		model.points[i].candidateWays = m.computeCondidateWays(model.points[i].OriginalCoordinate,model.points[i-1].OriginalCoordinate)
 	}
 
-	for _, w := range m.Ways {
-		p := w.FindProjection(Coordinate{lat, lng})
-		result = append(result,  Point{
-			p.Coordinate,
-			0,
+	//Finding best condidate for each point.
+	result = append(result, Point{
+		Index: 0,
+		Coordinate: model.points[0].MatchedProjection.Coordinate,
+	})
+	for i := startIndex; i < len(model.points); i++ {
+
+		//Finding closest way among candidates
+		maximumDF := -math.MaxFloat64
+		var matchedWay *Way
+		for _, w := range model.points[i].candidateWays {
+			if df := computeDistanceFactor(model.points[i].OriginalCoordinate,w); df > maximumDF {
+				matchedWay = &w
+				maximumDF=df
+			}
+		}
+
+		if matchedWay != nil {
+			model.points[i].MatchedProjection = matchedWay.FindProjection(model.points[i].OriginalCoordinate)
+		} else {
+			model.points[i].MatchedProjection = model.points[i-1].MatchedProjection
+		}
+		result = append(result, Point{
+			Index: i,
+			Coordinate: model.points[i].MatchedProjection.Coordinate,
 		})
 	}
 
-	return result
+	return result,nil
 }
+
 
 //Is used to match the starting point
 func (model *FastMapMatcher) matchFirstPoint() (err error) {
@@ -104,9 +123,9 @@ func (model *FastMapMatcher) matchFirstPoint() (err error) {
 	for _, w := range arcs {
 		p := w.FindProjection(model.points[0].OriginalCoordinate)
 		if p.Distance < distance {
-			model.points[0].MatchedProjection = &p
+			model.points[0].MatchedProjection = p
 		}
 	}
-
+	model.firstUnmatchedIndex++
 	return
 }

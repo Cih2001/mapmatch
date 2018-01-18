@@ -1,7 +1,6 @@
 package mapmatch
 
 import (
-	"log"
 	"math"
 )
 
@@ -47,7 +46,7 @@ func (model *Way) GetWayPointByIndex(i int) WayPoint {
 	}
 }
 
-func (model *Way) FindProjection(cor Coordinate) Projection {
+func (model *Way) FindProjection(cor Coordinate) *Projection {
 	result := Projection{
 		Arc: model,
 	}
@@ -64,11 +63,12 @@ func (model *Way) FindProjection(cor Coordinate) Projection {
 			result.Distance = distance
 			result.FirstWayPoint = firstWayPoint
 			result.SecondWayPoint = secondWayPoint
+			
 			//result.Direction = computeDirection(firstNode, secondNode)
 		}
 
 	}
-	return result
+	return &result
 }
 
 func linearDistance(lat1, lng1, lat2, lng2 float64) float64 {
@@ -93,10 +93,12 @@ func perpendicularDistance(cor Coordinate, waypoint1, waypoint2 WayPoint) (dista
 	//result.Longitude = (m*(cor.Longitude-waypoint1.Latitude+m*waypoint1.Longitude) + cor.Longitude) * m / (m*m + 1)
 	//result.Latitude = waypoint1.Latitude + m*(result.Longitude-waypoint1.Longitude)
 	k := waypoint2.Latitude - m*waypoint2.Longitude
+	
+	
 	result.Longitude = (cor.Longitude + m*cor.Latitude - m*k) / (m*m + 1)
 	result.Latitude = m*result.Longitude + k
 	distance = cor.linearDistance(result)
-
+	
 	if isInWayPointsLimits(result, waypoint1, waypoint2) {
 		return
 	}
@@ -126,6 +128,5 @@ func isInWayPointsLimits(cor Coordinate, w1, w2 WayPoint) bool {
 	if minLng < cor.Longitude && cor.Longitude < maxLng && minLat < cor.Latitude && cor.Latitude < maxLat {
 		return true
 	}
-	log.Println(minLng, maxLng, minLat, maxLat)
 	return false
 }
