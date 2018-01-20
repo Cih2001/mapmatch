@@ -2,6 +2,7 @@ package mapmatch
 
 import (
 	"math"
+	"log"
 )
 
 type FastMapMatcher struct {
@@ -87,19 +88,29 @@ func (model *FastMapMatcher) MatchLastNPoints(N int) ([]Point, error) {
 
 		//Finding closest way among candidates
 		maximumDF := -math.MaxFloat64
-		var matchedWay *Way
-		for _, w := range model.points[i].candidateWays {
-			if df := computeDistanceFactor(model.points[i].OriginalCoordinate,w); df > maximumDF {
-				matchedWay = &w
+		var matchedWayIndex = -1
+		print("\033[H\033[2J")
+		for j, w := range model.points[i].candidateWays {
+			df := computeDistanceFactor(model.points[i].OriginalCoordinate,w)
+			if i == len(model.points)-1 {
+				log.Println(w.ID,w.Tags["name"],df)
+			}
+			if df > maximumDF {
+				matchedWayIndex = j
 				maximumDF=df
 			}
 		}
 
-		if matchedWay != nil {
-			model.points[i].MatchedProjection = matchedWay.FindProjection(model.points[i].OriginalCoordinate)
+		var matchedWay *Way
+		if matchedWayIndex >= 0 {
+			matchedWay = &model.points[i].candidateWays[matchedWayIndex]
 		} else {
-			model.points[i].MatchedProjection = model.points[i-1].MatchedProjection
+			matchedWay = model.points[i-1].MatchedProjection.Arc
 		}
+		model.points[i].MatchedProjection = matchedWay.FindProjection(model.points[i].OriginalCoordinate)
+		log.Println("Direction of last two points: ", model.points[i-1].OriginalCoordinate.direction(model.points[i].OriginalCoordinate))
+		log.Println("Direction of last two projec: ", model.points[i-1].MatchedProjection.direction(model.points[i].MatchedProjection.Coordinate))
+		
 		result = append(result, Point{
 			Index: i,
 			Coordinate: model.points[i].MatchedProjection.Coordinate,
@@ -124,6 +135,7 @@ func (model *FastMapMatcher) matchFirstPoint() (err error) {
 		p := w.FindProjection(model.points[0].OriginalCoordinate)
 		if p.Distance < distance {
 			model.points[0].MatchedProjection = p
+			distance = p.Distance
 		}
 	}
 	model.firstUnmatchedIndex++

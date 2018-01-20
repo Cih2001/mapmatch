@@ -20,7 +20,7 @@ type Projection struct {
 	Distance       float64
 	FirstWayPoint  WayPoint
 	SecondWayPoint WayPoint
-	Direction      float64
+	Direction      int
 	OneWay         bool
 }
 
@@ -63,12 +63,23 @@ func (model *Way) FindProjection(cor Coordinate) *Projection {
 			result.Distance = distance
 			result.FirstWayPoint = firstWayPoint
 			result.SecondWayPoint = secondWayPoint
-			
-			//result.Direction = computeDirection(firstNode, secondNode)
+			result.Direction = firstWayPoint.Coordinate.direction(secondWayPoint.Coordinate)
 		}
 
 	}
 	return &result
+}
+
+func (model Coordinate) direction(cor Coordinate) int {
+	slope := float64((cor.Latitude - model.Latitude) / (cor.Longitude - model.Longitude))
+	angle := int(math.Atan(slope) * 180 / math.Pi)
+	if cor.Longitude-model.Longitude > 0 {
+		if cor.Latitude-model.Latitude > 0 {
+			return angle
+		}
+		return angle + 360
+	}
+	return 180 + angle
 }
 
 func linearDistance(lat1, lng1, lat2, lng2 float64) float64 {
