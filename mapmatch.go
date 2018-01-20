@@ -1,20 +1,20 @@
 package mapmatch
 
 import (
-	"math"
 	"log"
+	"math"
 )
 
 type FastMapMatcher struct {
-	osmMap           *OsmMap
-	points           []PointsData
+	osmMap              *OsmMap
+	points              []PointsData
 	firstUnmatchedIndex int
 }
 
 type PointsData struct {
 	OriginalCoordinate Coordinate
 	MatchedProjection  *Projection
-	candidateWays []Way
+	candidateWays      []Way
 }
 
 type Coordinate struct {
@@ -36,8 +36,22 @@ func (model *FastMapMatcher) MatchPoint(lat, lng float64) ([]Point, error) {
 	}
 	model.points = append(model.points, pointData)
 
-	
 	return model.MatchLastNPoints(-1)
+}
+
+func (model *FastMapMatcher) computeCondidateWays(candidateIndex int) {
+	var result []Way
+
+	for _, w := range model.osmMap.Ways {
+		var distanceFactor float64
+		currentCoordinate := model.points[candidateIndex].OriginalCoordinate
+		distanceFactor = computeDistanceFactor(currentCoordinate, w)
+		if distanceFactor > 0.1 {
+			result = append(result, w)
+		}
+	}
+	
+	model.points[candidateIndex].candidateWays = result
 }
 
 //MatchLastNPoints matches last N points, when N is 0, It will start from model.firstUnmatchedIndex and when N is negative, it will match all points.
@@ -49,77 +63,111 @@ func (model *FastMapMatcher) MatchLastNPoints(N int) ([]Point, error) {
 	}
 
 	var (
-		result = []Point{}
-		lastMapRefreshIndex = 0
-		startIndex = 0
+		result                   = []Point{}
+		lastMapRefreshIndex      = 0
+		startIndex               = 0
 		MaximumDistanceToRefresh = 200.0
-		m, _ = NewOsmMap(model.points[0].OriginalCoordinate)
+		m, _                     = NewOsmMap(model.points[0].OriginalCoordinate)
 	)
-	
+
+	model.osmMap = m
 	//Computing starting index
 	switch {
-	case N<0:
+	case N < 0:
 		startIndex = 1
-	case N==0:
+	case N == 0:
 		startIndex = model.firstUnmatchedIndex
-	case N>0:
-		startIndex = len(model.points)-N
+	case N > 0:
+		startIndex = len(model.points) - N
 		if startIndex <= 1 {
-			startIndex = 1 
+			startIndex = 1
 		}
 	}
-	
+
 	//Computing condidates for each point.
 	for i := startIndex; i < len(model.points); i++ {
 		//refreshing roads database if nessessary.
 		if model.points[i].OriginalCoordinate.linearDistance(model.points[lastMapRefreshIndex].OriginalCoordinate)*110575 > MaximumDistanceToRefresh {
 			m, _ = NewOsmMap(model.points[i].OriginalCoordinate)
+			model.osmMap = m
 			lastMapRefreshIndex = i
 		}
-		model.points[i].candidateWays = m.computeCondidateWays(model.points[i].OriginalCoordinate,model.points[i-1].OriginalCoordinate)
+		//model.points[i].candidateWays = model.computeCondidateWays(model.points[i].OriginalCoordinate,model.points[i-1].OriginalCoordinate)
+		model.computeCondidateWays(i)
 	}
 
 	//Finding best condidate for each point.
 	result = append(result, Point{
-		Index: 0,
+		Index:      0,
 		Coordinate: model.points[0].MatchedProjection.Coordinate,
 	})
-	for i := startIndex; i < len(model.points); i++ {
+	for i := startIndex; i < len(model.points); {
 
 		//Finding closest way among candidates
-		maximumDF := -math.MaxFloat64
-		var matchedWayIndex = -1
+		// maximumDF := -math.MaxFloat64
+		// var matchedWayIndex = -1
 		print("\033[H\033[2J")
-		for j, w := range model.points[i].candidateWays {
-			df := computeDistanceFactor(model.points[i].OriginalCoordinate,w)
-			if i == len(model.points)-1 {
-				log.Println(w.ID,w.Tags["name"],df)
-			}
-			if df > maximumDF {
-				matchedWayIndex = j
-				maximumDF=df
-			}
+		// for j, w := range model.points[i].candidateWays {
+		// 	df := computeDistanceFactor(model.points[i].OriginalCoordinate,w)
+		// 	if i == len(model.points)-1 {
+		// 		log.Println(w.ID,w.Tags["name"],df)
+		// 	}
+		// 	if df > maximumDF {
+		// 		matchedWayIndex = j
+		// 		maximumDF=df
+		// 	}
+		// }
+
+		// var matchedWay *Way
+		// if matchedWayIndex >= 0 {
+		// 	matchedWay = &model.points[i].candidateWays[matchedWayIndex]
+		// } else {
+		// 	matchedWay = model.points[i-1].MatchedProjection.Arc
+		// }
+		// model.points[i].MatchedProjection = matchedWay.FindProjection(model.points[i].OriginalCoordinate)
+		// log.Println("Direction of last two points: ", model.points[i-1].OriginalCoordinate.direction(model.points[i].OriginalCoordinate))
+		// log.Println("Direction of last two projec: ", model.points[i-1].MatchedProjection.direction(model.points[i].MatchedProjection.Coordinate))
+
+		// result = append(result, Point{
+		// 	Index: i,
+		// 	Coordinate: model.points[i].MatchedProjection.Coordinate,
+		// })
+
+		//Finding all combinations.
+		CombinationLimit := 100
+		if len(model.points)-i < CombinationLimit {
+			CombinationLimit = len(model.points) - i
 		}
 
-		var matchedWay *Way
-		if matchedWayIndex >= 0 {
-			matchedWay = &model.points[i].candidateWays[matchedWayIndex]
-		} else {
-			matchedWay = model.points[i-1].MatchedProjection.Arc
+		for _, comb := range model.findCombinations(i, CombinationLimit) {
+			log.Println("Comb:", comb)
 		}
-		model.points[i].MatchedProjection = matchedWay.FindProjection(model.points[i].OriginalCoordinate)
-		log.Println("Direction of last two points: ", model.points[i-1].OriginalCoordinate.direction(model.points[i].OriginalCoordinate))
-		log.Println("Direction of last two projec: ", model.points[i-1].MatchedProjection.direction(model.points[i].MatchedProjection.Coordinate))
-		
-		result = append(result, Point{
-			Index: i,
-			Coordinate: model.points[i].MatchedProjection.Coordinate,
-		})
+
+		i += CombinationLimit
+
 	}
 
-	return result,nil
+	return result, nil
 }
 
+func (model *FastMapMatcher) findCombinations(startIndex, Limit int) (result [][]int) {
+	//We should check for the return base
+	if Limit == 1 {
+		for idx := range model.points[startIndex].candidateWays {
+			result = append(result, []int{idx})
+		}
+		return result
+	}
+	//for general case
+	nextCombinations := model.findCombinations(startIndex+1, Limit-1)
+	for i := range nextCombinations {
+		for idx := range model.points[startIndex].candidateWays {
+			sl := append([]int{idx}, nextCombinations[i]...)
+			result = append(result, sl)
+		}
+	}
+	return result
+}
 
 //Is used to match the starting point
 func (model *FastMapMatcher) matchFirstPoint() (err error) {
