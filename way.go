@@ -104,12 +104,11 @@ func perpendicularDistance(cor Coordinate, waypoint1, waypoint2 WayPoint) (dista
 	//result.Longitude = (m*(cor.Longitude-waypoint1.Latitude+m*waypoint1.Longitude) + cor.Longitude) * m / (m*m + 1)
 	//result.Latitude = waypoint1.Latitude + m*(result.Longitude-waypoint1.Longitude)
 	k := waypoint2.Latitude - m*waypoint2.Longitude
-	
-	
+
 	result.Longitude = (cor.Longitude + m*cor.Latitude - m*k) / (m*m + 1)
 	result.Latitude = m*result.Longitude + k
 	distance = cor.linearDistance(result)
-	
+
 	if isInWayPointsLimits(result, waypoint1, waypoint2) {
 		return
 	}
@@ -140,4 +139,16 @@ func isInWayPointsLimits(cor Coordinate, w1, w2 WayPoint) bool {
 		return true
 	}
 	return false
+}
+
+// A probability to measure how likely a GPS observation is matched to a candidate arc.
+// It is based on normal distribution.
+func (model *Way) normalProbability(cor Coordinate) float64 {
+	var NormalMean float64
+	var NormalDeviation float64 = 20 //Amount of expected GPS error
+	projection := model.FindProjection(cor)
+	distanceMeter := projection.Distance * float64(distanceMeterFactor)
+	//Normal distribution formula
+	probability := 1 / (math.Sqrt(2*math.Pi) * NormalDeviation) * math.Exp(-(math.Pow(distanceMeter-NormalMean, 2) / (2 * math.Pow(NormalDeviation, 2))))
+	return probability
 }

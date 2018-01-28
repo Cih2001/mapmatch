@@ -3,6 +3,11 @@ package mapmatch
 import (
 	"log"
 	"math"
+	"sync"
+)
+
+var (
+	distanceMeterFactor = 110575.0
 )
 
 type FastMapMatcher struct {
@@ -50,7 +55,7 @@ func (model *FastMapMatcher) computeCondidateWays(candidateIndex int) {
 			result = append(result, w)
 		}
 	}
-	
+
 	model.points[candidateIndex].candidateWays = result
 }
 
@@ -87,7 +92,7 @@ func (model *FastMapMatcher) MatchLastNPoints(N int) ([]Point, error) {
 	//Computing condidates for each point.
 	for i := startIndex; i < len(model.points); i++ {
 		//refreshing roads database if nessessary.
-		if model.points[i].OriginalCoordinate.linearDistance(model.points[lastMapRefreshIndex].OriginalCoordinate)*110575 > MaximumDistanceToRefresh {
+		if model.points[i].OriginalCoordinate.linearDistance(model.points[lastMapRefreshIndex].OriginalCoordinate)*distanceMeterFactor > MaximumDistanceToRefresh {
 			m, _ = NewOsmMap(model.points[i].OriginalCoordinate)
 			model.osmMap = m
 			lastMapRefreshIndex = i
@@ -134,20 +139,58 @@ func (model *FastMapMatcher) MatchLastNPoints(N int) ([]Point, error) {
 		// })
 
 		//Finding all combinations.
-		CombinationLimit := 100
+		CombinationLimit := 5
 		if len(model.points)-i < CombinationLimit {
 			CombinationLimit = len(model.points) - i
 		}
 
-		for _, comb := range model.findCombinations(i, CombinationLimit) {
-			log.Println("Comb:", comb)
+		var wg sync.WaitGroup
+		pathWeights := make(map[int]float64)
+		combinations := model.findCombinations(i, CombinationLimit)
+		var mutex = &sync.Mutex{}
+		for j, comb := range combinations {
+			wg.Add(1)
+			go func(k int, c []int) {
+				w := model.findPathWeight(i, c, &wg)
+				mutex.Lock()
+				pathWeights[k] = w
+				mutex.Unlock()
+			}(j, comb)
 		}
-
+		wg.Wait()
+		mutex.Lock()
+		defer mutex.Unlock()
+		log.Println("Done waiting")
+		maxPathWeight := -math.MaxFloat64
+		bestPathIndex := 0
+		for k, v := range pathWeights {
+			if v > maxPathWeight {
+				maxPathWeight = v
+				bestPathIndex = k
+			}
+		}
+		for j, c := range combinations[bestPathIndex] {
+			matchedWay := model.points[i+j].candidateWays[c]
+			model.points[i+j].MatchedProjection = matchedWay.FindProjection(model.points[i+j].OriginalCoordinate)
+			result = append(result, Point{
+				Index:      i + j,
+				Coordinate: model.points[i+j].MatchedProjection.Coordinate,
+			})
+		}
 		i += CombinationLimit
-
 	}
 
 	return result, nil
+}
+func (model *FastMapMatcher) findPathWeight(startIndex int, combination []int, wg *sync.WaitGroup) float64 {
+	defer wg.Done()
+	result := 0.0
+	for i, c := range combination {
+		point := model.points[startIndex+i]
+		way := point.candidateWays[c]
+		result += way.normalProbability(point.OriginalCoordinate)
+	}
+	return result
 }
 
 func (model *FastMapMatcher) findCombinations(startIndex, Limit int) (result [][]int) {
