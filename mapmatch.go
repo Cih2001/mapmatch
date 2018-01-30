@@ -3,7 +3,10 @@ package mapmatch
 import (
 	"log"
 	"math"
+	"strconv"
 	"sync"
+
+	"github.com/RyanCarrier/dijkstra"
 )
 
 var (
@@ -14,12 +17,13 @@ type FastMapMatcher struct {
 	osmMap              *OsmMap
 	points              []PointsData
 	firstUnmatchedIndex int
+	generalMutex        *sync.Mutex
 }
 
 type PointsData struct {
 	OriginalCoordinate Coordinate
 	MatchedProjection  *Projection
-	candidateWays      []Way
+	candidateWays      []*Way
 }
 
 type Coordinate struct {
@@ -33,6 +37,12 @@ type Point struct {
 }
 
 func (model *FastMapMatcher) MatchPoint(lat, lng float64) ([]Point, error) {
+	if model.generalMutex == nil {
+		model.generalMutex = &sync.Mutex{}
+	}
+	model.generalMutex.Lock()
+	defer model.generalMutex.Unlock()
+
 	pointData := PointsData{
 		OriginalCoordinate: Coordinate{
 			Latitude:  lat,
@@ -41,11 +51,11 @@ func (model *FastMapMatcher) MatchPoint(lat, lng float64) ([]Point, error) {
 	}
 	model.points = append(model.points, pointData)
 
-	return model.MatchLastNPoints(-1)
+	return model.MatchLastNPoints(3)
 }
 
 func (model *FastMapMatcher) computeCondidateWays(candidateIndex int) {
-	var result []Way
+	var result []*Way
 
 	for _, w := range model.osmMap.Ways {
 		var distanceFactor float64
@@ -88,7 +98,7 @@ func (model *FastMapMatcher) MatchLastNPoints(N int) ([]Point, error) {
 			startIndex = 1
 		}
 	}
-
+	log.Println("StartIndex:", startIndex)
 	//Computing condidates for each point.
 	for i := startIndex; i < len(model.points); i++ {
 		//refreshing roads database if nessessary.
@@ -107,37 +117,6 @@ func (model *FastMapMatcher) MatchLastNPoints(N int) ([]Point, error) {
 		Coordinate: model.points[0].MatchedProjection.Coordinate,
 	})
 	for i := startIndex; i < len(model.points); {
-
-		//Finding closest way among candidates
-		// maximumDF := -math.MaxFloat64
-		// var matchedWayIndex = -1
-		print("\033[H\033[2J")
-		// for j, w := range model.points[i].candidateWays {
-		// 	df := computeDistanceFactor(model.points[i].OriginalCoordinate,w)
-		// 	if i == len(model.points)-1 {
-		// 		log.Println(w.ID,w.Tags["name"],df)
-		// 	}
-		// 	if df > maximumDF {
-		// 		matchedWayIndex = j
-		// 		maximumDF=df
-		// 	}
-		// }
-
-		// var matchedWay *Way
-		// if matchedWayIndex >= 0 {
-		// 	matchedWay = &model.points[i].candidateWays[matchedWayIndex]
-		// } else {
-		// 	matchedWay = model.points[i-1].MatchedProjection.Arc
-		// }
-		// model.points[i].MatchedProjection = matchedWay.FindProjection(model.points[i].OriginalCoordinate)
-		// log.Println("Direction of last two points: ", model.points[i-1].OriginalCoordinate.direction(model.points[i].OriginalCoordinate))
-		// log.Println("Direction of last two projec: ", model.points[i-1].MatchedProjection.direction(model.points[i].MatchedProjection.Coordinate))
-
-		// result = append(result, Point{
-		// 	Index: i,
-		// 	Coordinate: model.points[i].MatchedProjection.Coordinate,
-		// })
-
 		//Finding all combinations.
 		CombinationLimit := 5
 		if len(model.points)-i < CombinationLimit {
@@ -186,10 +165,55 @@ func (model *FastMapMatcher) findPathWeight(startIndex int, combination []int, w
 	defer wg.Done()
 	result := 0.0
 	for i, c := range combination {
-		point := model.points[startIndex+i]
-		way := point.candidateWays[c]
-		result += way.normalProbability(point.OriginalCoordinate)
+		currentPoint := model.points[startIndex+i]
+		currentWay := currentPoint.candidateWays[c]
+
+		prevPoint := model.points[startIndex+i-1]
+		var prevWay *Way
+		if i == 0 {
+			if prevPoint.MatchedProjection == nil {
+				//Probably an error, we must restart. the path
+				model.hardFixFromIndex(startIndex+i-1)			
+			}
+			prevWay = prevPoint.MatchedProjection.Arc
+		} else {
+			prevWay = prevPoint.candidateWays[combination[i-1]]
+		}
+
+		result += currentWay.normalProbability(currentPoint.OriginalCoordinate)
+		result += model.shortestPathProbability(startIndex+i, currentWay, prevWay)
 	}
+	return result
+}
+func (model *FastMapMatcher) hardFixFromIndex(i int) {
+	if model.points[i-1].MatchedProjection == nil {
+		model.hardFixFromIndex(i-1)
+	}
+	model.points[i].MatchedProjection = model.points[i-1].MatchedProjection.Arc.FindProjection(model.points[i].OriginalCoordinate)
+	model.points[i].candidateWays = append(model.points[i].candidateWays, model.points[i-1].MatchedProjection.Arc)
+}
+func (model *FastMapMatcher) shortestPathProbability(index int, currentArc, prevArc *Way) float64 {
+	srcProjection := prevArc.FindProjection(model.points[index-1].OriginalCoordinate)
+	desProjection := currentArc.FindProjection(model.points[index].OriginalCoordinate)
+	distance := srcProjection.Coordinate.linearDistance(desProjection.Coordinate) * distanceMeterFactor
+	//m, _ := NewOsmMap(model.PointCollection[index].EstimatedPoint.Lat, model.PointCollection[index].EstimatedPoint.Lng)
+	shortestPath, err := dijkstraShortestPath(model.osmMap.Ways, srcProjection, desProjection)
+	if err != nil {
+		return 0
+	}
+
+	adjustResult := func(r float64) float64 {
+		if r <= 0 {
+			return 0
+		}
+		if r >= 1 {
+
+			return 1
+		}
+		return r
+	}
+
+	result := adjustResult(distance/float64(shortestPath)) - 0.10
 	return result
 }
 
@@ -214,7 +238,7 @@ func (model *FastMapMatcher) findCombinations(startIndex, Limit int) (result [][
 
 //Is used to match the starting point
 func (model *FastMapMatcher) matchFirstPoint() (err error) {
-	var arcs []Way
+	var arcs []*Way
 	m, err := NewOsmMap(model.points[0].OriginalCoordinate)
 	if err != nil {
 		return
@@ -231,4 +255,55 @@ func (model *FastMapMatcher) matchFirstPoint() (err error) {
 	}
 	model.firstUnmatchedIndex++
 	return
+}
+
+//It will return the shortest path distance between src and des in meters.
+func dijkstraShortestPath(arcs []*Way, srcProjection, desProjection *Projection) (float64, error) {
+	graph := dijkstra.NewGraph()
+	DirectedGraph := true
+
+	//When both projections are on the same way, shortest path is the distance between them
+	if srcProjection.FirstWayPoint.ID == desProjection.FirstWayPoint.ID && srcProjection.SecondWayPoint.ID == desProjection.SecondWayPoint.ID {
+		return srcProjection.linearDistance(desProjection.Coordinate) * distanceMeterFactor, nil
+	}
+
+	//Building graph of roads
+	for _, way := range arcs {
+		for i := 0; i < len(way.Loc.Coordinates)-1; i++ {
+			firstWayPoint := way.GetWayPointByIndex(i)
+			secondWayPoint := way.GetWayPointByIndex(i + 1)
+
+			graph.AddMappedVertex(strconv.Itoa(int(firstWayPoint.ID)))
+			graph.AddMappedVertex(strconv.Itoa(int(secondWayPoint.ID)))
+
+			distance := firstWayPoint.linearDistance(secondWayPoint) * distanceMeterFactor
+			graph.AddMappedArc(strconv.Itoa(int(firstWayPoint.ID)), strconv.Itoa(int(secondWayPoint.ID)), int64(distance))
+			if way.Tags["oneway"] != "yes" || !DirectedGraph {
+				graph.AddMappedArc(strconv.Itoa(int(secondWayPoint.ID)), strconv.Itoa(int(firstWayPoint.ID)), int64(distance))
+			}
+		}
+	}
+
+	//Adding source and destinations
+	srcVertex := graph.AddMappedVertex("src")
+	desVertex := graph.AddMappedVertex("des")
+
+	d := int64(srcProjection.SecondWayPoint.Coordinate.linearDistance(srcProjection.Coordinate) * distanceMeterFactor)
+	graph.AddMappedArc("src", strconv.Itoa(int(srcProjection.SecondWayPoint.ID)), d)
+
+	d = int64(srcProjection.FirstWayPoint.Coordinate.linearDistance(srcProjection.Coordinate) * distanceMeterFactor)
+	graph.AddMappedArc("src", strconv.Itoa(int(srcProjection.FirstWayPoint.ID)), d)
+
+	d = int64(desProjection.FirstWayPoint.Coordinate.linearDistance(desProjection.Coordinate) * distanceMeterFactor)
+	graph.AddMappedArc(strconv.Itoa(int(desProjection.FirstWayPoint.ID)), "des", d)
+
+	d = int64(desProjection.SecondWayPoint.Coordinate.linearDistance(desProjection.Coordinate) * distanceMeterFactor)
+	graph.AddMappedArc(strconv.Itoa(int(desProjection.SecondWayPoint.ID)), "des", d)
+
+	//Finding the result
+	best, err := graph.Shortest(srcVertex, desVertex)
+	if err != nil {
+		return 0, err
+	}
+	return float64(best.Distance), err
 }

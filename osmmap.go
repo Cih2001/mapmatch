@@ -5,18 +5,18 @@ import (
 )
 
 type OsmMap struct {
-	Ways []Way
+	Ways []*Way
 }
 
 
-func computeDistanceFactor(cor Coordinate, arc Way) float64 {
+func computeDistanceFactor(cor Coordinate, arc *Way) float64 {
 	//return DistanceC - DistanceA*math.Pow(projection.Distance*110575, DistanceN)
 	return normalProbability(cor,arc)*100
 }
 
 // A probability to measure how likely a GPS observation is matched to a candidate arc.
 // It is based on normal distribution
-func normalProbability(cor Coordinate, arc Way) float64 {
+func normalProbability(cor Coordinate, arc *Way) float64 {
 	projection := arc.FindProjection(cor)
 	distanceMeter := projection.Distance * 110575
 	NormalMean := 0.0
